@@ -1,6 +1,6 @@
-# noeqd - A fault-tolerant network service for meaningful GUID generation
+# guid - A library for generating globally unique identifiers
 
-Based on [snowflake][].
+Derived from [noeqd][], which in turn is based on [snowflake][].
 
 ## Motivation
 
@@ -23,13 +23,13 @@ This network service should also have these properties (Differences from [snowfl
 
 * `GUID`: Globally Unique Identifier
 * `datacenter`: A facility used to house computer systems.
-* `worker`: A single `noeqd` process with a worker and datacenter ID combination unique to their cohort.
+* `worker`: A single process with a worker and datacenter ID combination unique to their cohort.
 * `datacenter-id`: An integer representing a particular datacenter.
 * `worker-id`: An integer representing a particular worker.
 * `machine-id`: The comination of `datacenter-id` and `worker-id`
 * `twepoch`: custom epoch (same as [snowflake][])
 
-## Important note:
+## Important Note
 
 Reliability, and guarantees depend on:
 
@@ -59,92 +59,6 @@ guarantee the current time is greater than the time of death. You can use the
 You may have up to 1024 machine ids. It's generally safe to not reuse them
 until you've reached this limit.
 
-## Install
-
-You can install noeqd by downloading the binary
-[here](http://github.com/bmizerany/noeqd/downloads) and putting it in your
-`PATH`.
-
-*or*
-
-Clone the repo and build with [Go](http://golang.org/doc/install.html) (Requires Go `0beb796b4ef8 weekly/weekly.2011-12-02` or later)
-
-		$ git clone http://github.com/bmizerany/noeqd
-		$ cd noeqd
-		$ make install
-
-## Run
-
-		$ noeqd -h
-		Usage of noeqd:
-		  -d=0: datacenter id
-		  -l="0.0.0.0:4444": the address to listen on
-		  -w=0: worker id
-
-**Coordinating machine-ids**
-
-Noeq does not assume you're using any automated coordination because it isn't
-always correct to assume this. Its easy to do without baking it in. Here is an
-example script in the repo for doing so if you need it (using [Doozer][]):
-
-		#!/bin/sh
-		# usage: ./coord-exec.sh <datacenter-id>
-
-		did=$1
-		wid=0
-
-		[ -z "$did" ] && did=0
-
-		_set() {
-		  printf 1 | doozer set /goflake/$did/$wid 0
-		}
-
-		while ! _set
-		do wid=`expr $wid + 1`
-		done
-
-		exec noeqd -w $wid -d $did
-
-## The Why
-
-**Uniqness**
-
-We must know that a GUID, once generated, has never and will never be generated
-again (i.e. Globally Unique) in our system.
-
-**Performance**
-
-Heroku serves many 10's of thousands of requests a second. Each request can
-require multiple actions that need their own id. To be on the safe side, we
-will require a minimum of 100k ids/sec (without network latency); possibly more
-in the very near future. See benchmarks near the end of this README.
-
-**Uncoordinated**
-
-We need all `noeqd`s to be able to generate GUIDs without coordinating with
-other `noeqd` processes. Coordination requires more time complexity than if
-we didn't require it and reduces the amount of GUIDs we can generate during
-that time. It also affects the yield (the probability the service will complete
-a request).
-
-**Direcly sortable by time (roughly)**
-
-Noeq (like [snowflake][]) will guarantee the GUIDs will be k-sorted within
-a reasonable bound (10's of ms to no more than 1s). More on this in "How it works."
-
-References:
-
-<http://portal.acm.org/citation.cfm?id=70413.70419>
-
-<http://portal.acm.org/citation.cfm?id=110778.110783>
-
-# The "Why not snowflake?"
-
-At Heroku, we value services that are simple, as self-contained as possible,
-and use nothing more than they can reasonably get away with. The setup and
-distribution of an application should be as quick and painless as possible.
-This means ruthlessly eliminating as much baggage, waste, and other overhead as
-possible.
 
 # How it works
 
@@ -183,93 +97,6 @@ processed within the same second, together they may sort like:
 
 NOTE: The A GUIDs will strictly sort, as will B's.
 
-## Clients
-
-Clients implement a simple wire-protocol that is specified below. Implementing
-a client in your favorite language is trivial and should require no
-dependencies.
-
-**Failure Recovery**
-
-Each client should keep a list of addresses of all known worker process (or
-use DNS) so that if one fails, it can move to another. To recover
-from a lost connection, a client should randomly select another address from
-its list, or in the case of DNS: reconnect using the same address allowing DNS
-to choose the next IP.
-
-See [noeq.go](http://github.com/bmizerany/noeq.go) for a working
-example.
-
-## Protocol
-
-*Auth Request*
-
-If the server has its `NOEQ_TOKEN` environment variable set to an non-empty string, the server will require authentication.
-
-		------------------------
-		|0|<len byte>|token ...|
-		------------------------
-
-An auth request starts with byte(0) and then a byte that is the length of the
-follwing token, followed by the token string. (NOTE: If a client and server
-hang during authentication, it's probably because the token is the client sent
-is too short.)
-
-*Id Request*:
-
-		-------
-		|uint8|
-		-------
-
-A request must contain only one byte. The value of the byte tells the
-server how many ids to respond with. A client can request up to 255 (or max uint8)
-ids per request.
-
-*Response*:
-
-		-------------------------------------------------- ...
-		|uint8|uint8|uint8|uint8|uint8|uint8|uint8|uint8|  ...
-		-------------------------------------------------- ...
-
-Each id comes as a 64bit integer in network byte order. The
-number of 64bit integers returned is the `request-byte * 8`
-
-*Errors*:
-
-Errors are logged by the server to stdout. Clients will have their
-connection closed to signal the need to try elsewhere until the server can
-recover. This generally happens if the servers clock is running backwards.
-
-## Benchmarks (fwiw)
-
-**MacAir 3, OS X 10.7.2, 2.13 GHz Intel Core 2 Duo, 4 GB 1067 MHz DDR3)**
-
-
-**Id Generation *without encoding* or network latency**
-
-This is the benchmark done by [snowflake] and reported in their README.
-
-		BenchmarkIdGeneration	675 ns/op	# 1.481 million ids/s
-		
-**Id Generation *with* encoding and *without* network latency**
-
-I find these benchmarks more realistic. The ids must be encoded so we want to
-know how fast an id can be generated and encoded in order to hit the wire.
-Benchmarks including a network are left as an exercise for the reader because
-all networks vary.
-
-These show that when a client can safely ask for more one than one id at a time,
-they can reduce time to wire and the expensive read/write operations.
-
-		BenchmarkServe01	 1677 ns/op	# 596303 ids/sec
-		BenchmarkServe02	 2352 ns/op	# 850340 ids/sec
-		BenchmarkServe03	 3067 ns/op	# 978155 ids/sec
-		BenchmarkServe05	 4436 ns/op	# 1.127 million ids/sec
-		BenchmarkServe08	 6436 ns/op	# 1.243 million ids/sec
-		BenchmarkServe13	10169 ns/op	# 1.278 million ids/sec
-		BenchmarkServe21	16257 ns/op	# 1.292 million ids/sec
-		BenchmarkServe34	25603 ns/op	# 1.328 million ids/sec
-		BenchmarkServe55	39693 ns/op	# 1.386 million ids/sec
 
 ## Contributing
 
@@ -280,24 +107,18 @@ pull-request button.
 
 ## Issues
 
-These are tracked in this repos Github [issues tracker](http://github.com/bmizerany/noeqd/issues).
-
-## See Also
-
-Noeq command line util:
-<http://github.com/bmizerany/noeq>
-
-Noeq.go for Go:
-<http://github.com/bmizerany/noeq.go>
+These are tracked in this repos Github [issues tracker](http://github.com/jmcvetta/guid/issues).
 
 ## Thank you
 
-I want to make sure I give the Snowflake team at Twitter as much credit as
-possible. The heart of this program is their doing.
+I want to make sure I give Blake Mizerany
+([@bmizerany](http://twitter.com/bmizerany)) at Heroku and the Snowflake team
+at Twitter as much credit as possible. The heart of this program is their
+doing.
 
 ## LICENSE
 
-Copyright (C) 2011 by Blake Mizerany ([@bmizerany](http://twitter.com/bmizerany))
+Copyright (C) 2012 by Jason McVetta
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -319,3 +140,4 @@ THE SOFTWARE.
 
 [Doozer]: http://github.com/ha/doozerd
 [snowflake]: http://github.com/twitter/snowflake
+[noeqd]: http://github.com/bmizerany/noeqd
