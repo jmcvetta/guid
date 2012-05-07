@@ -1,24 +1,13 @@
-package main
+// Copyright 2012 Jason McVetta.  This is Free Software, released under
+// an MIT-style license.  See README.md for details.
+
+// Package guid implements a generator for roughly sorted globally unique IDs.
+package guid
 
 import (
-	"errors"
-	"flag"
 	"fmt"
-	"io"
-	"log"
-	"net"
-	"os"
 	"sync"
 	"time"
-)
-
-var (
-	ErrInvalidRequest = errors.New("invalid request")
-	ErrInvalidAuth    = errors.New("invalid auth")
-)
-
-var (
-	token = os.Getenv("NOEQ_TOKEN")
 )
 
 const (
@@ -36,164 +25,77 @@ const (
 	twepoch = int64(1288834974657)
 )
 
-// Flags
-var (
-	wid   = flag.Int64("w", 0, "worker id")
-	did   = flag.Int64("d", 0, "datacenter id")
-	laddr = flag.String("l", "0.0.0.0:4444", "the address to listen on")
-	lts   = flag.Int64("t", -1, "the last timestamp in milliseconds")
-)
-
-var (
-	mu  sync.Mutex
-	seq int64
-)
-
-func main() {
-	parseFlags()
-	acceptAndServe(mustListen())
+// A GUID generator
+type Generator interface {
+	NextId() (int64, error) // Get the next GUID
 }
 
-func parseFlags() {
-	flag.Parse()
-	if *wid < 0 || *wid > maxWorkerId {
-		log.Fatalf("worker id must be between 0 and %d", maxWorkerId)
-	}
-
-	if *did < 0 || *did > maxDatacenterId {
-		log.Fatalf("datacenter id must be between 0 and %d", maxDatacenterId)
-	}
-}
-
-func mustListen() net.Listener {
-	l, err := net.Listen("tcp", *laddr)
-	if err != nil {
-		log.Fatal(err)
-	}
-	return l
-}
-
-func acceptAndServe(l net.Listener) {
-	for {
-		cn, err := l.Accept()
-		if err != nil {
-			log.Println(err)
-		}
-
-		go func() {
-			err := serve(cn, cn)
-			if err != io.EOF {
-				log.Println(err)
-			}
-			cn.Close()
-		}()
-	}
-}
-
-func serve(r io.Reader, w io.Writer) error {
-	if token != "" {
-		err := auth(r)
-		if err != nil {
-			return err
-		}
-	}
-
-	c := make([]byte, 1)
-	for {
-		// Wait for 1 byte request
-		_, err := io.ReadFull(r, c)
-		if err != nil {
-			return err
-		}
-
-		n := uint(c[0])
-		if n == 0 {
-			// No authing at this point
-			return ErrInvalidRequest
-		}
-
-		b := make([]byte, n*8)
-		for i := uint(0); i < n; i++ {
-			id, err := nextId()
-			if err != nil {
-				return err
-			}
-
-			off := i * 8
-			b[off+0] = byte(id >> 56)
-			b[off+1] = byte(id >> 48)
-			b[off+2] = byte(id >> 40)
-			b[off+3] = byte(id >> 32)
-			b[off+4] = byte(id >> 24)
-			b[off+5] = byte(id >> 16)
-			b[off+6] = byte(id >> 8)
-			b[off+7] = byte(id)
-		}
-
-		_, err = w.Write(b)
-		if err != nil {
-			return err
-		}
-	}
-
-	panic("not reached")
+type snowflake struct {
+	mu         sync.Mutex
+	seq        int64
+	Datacenter *int64 // Datacenter ID
+	Worker     *int64 // Worker ID
+	LastTs     *int64 // Last timestamp
 }
 
 func milliseconds() int64 {
 	return time.Now().UnixNano() / 1e6
 }
 
-func nextId() (int64, error) {
-	mu.Lock()
-	defer mu.Unlock()
+// NextId returns the next GUID.
+func (s snowflake) NextId() (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	ts := milliseconds()
 
-	if ts < *lts {
-		return 0, fmt.Errorf("time is moving backwards, waiting until %d\n", *lts)
+	if ts < *s.LastTs {
+		return 0, fmt.Errorf("time is moving backwards, waiting until %d\n", *s.LastTs)
 	}
 
-	if *lts == ts {
-		seq = (seq + 1) & sequenceMask
-		if seq == 0 {
-			for ts <= *lts {
+	if *s.LastTs == ts {
+		s.seq = (s.seq + 1) & sequenceMask
+		if s.seq == 0 {
+			for ts <= *s.LastTs {
 				ts = milliseconds()
 			}
 		}
 	} else {
-		seq = 0
+		s.seq = 0
 	}
 
-	*lts = ts
+	*s.LastTs = ts
 
 	id := ((ts - twepoch) << timestampLeftShift) |
-		(*did << datacenterIdShift) |
-		(*wid << workerIdShift) |
-		seq
+		(*s.Datacenter << datacenterIdShift) |
+		(*s.Worker << workerIdShift) |
+		s.seq
 
 	return id, nil
 }
 
-func auth(r io.Reader) error {
-	b := make([]byte, 2)
-	_, err := io.ReadFull(r, b)
-	if err != nil {
-		return err
+// NewGenerator returns a Generator when configured with datacenter ID, 
+// worker ID, and last timestamp.
+func NewGenerator(datacenter, worker, lastts *int64) Generator {
+	s := snowflake{
+		Worker:     worker,
+		Datacenter: datacenter,
+		LastTs:     lastts,
 	}
+	return s
+}
 
-	if b[0] != 0 {
-		return ErrInvalidRequest
-	}
+var defaultGenerator Generator
 
-	b = make([]byte, b[1])
-	_, err = io.ReadFull(r, b)
-	if err != nil {
-		return err
-	}
+func init() {
+	d := int64(0)
+	w := int64(0)
+	l := int64(-1)
+	defaultGenerator = NewGenerator(&d, &w, &l)
+}
 
-	if string(b) != token {
-		return ErrInvalidAuth
-	}
-
-	return nil
+// NextId returns a GUID without requring any special setup.  Not suitable
+// for use in clustered applications.
+func NextId() (int64, error) {
+	return defaultGenerator.NextId()
 }

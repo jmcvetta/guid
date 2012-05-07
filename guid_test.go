@@ -1,27 +1,52 @@
-package main
+// Copyright 2012 Jason McVetta.  This is Free Software, released under
+// an MIT-style license.  See README.md for more info.
+
+package guid
 
 import (
-	"bytes"
-	"github.com/bmizerany/assert"
 	"testing"
 )
 
-func TestServeZero(t *testing.T) {
-	i, o := bytes.NewBuffer([]byte{0}), new(bytes.Buffer)
-	serve(i, o)
-	assert.Equal(t, 0, o.Len())
+func TestUniqueness(t *testing.T) {
 }
 
-func TestServeMoreThanZero(t *testing.T) {
-	i, o := bytes.NewBuffer([]byte{1}), new(bytes.Buffer)
-	serve(i, o)
-	assert.Equal(t, 8, o.Len())
+func BenchmarkIdGeneration(b *testing.B) {
+	for n := 0; n < b.N; n++ {
+		guid, err := NextId()
+		if err != nil {
+			b.Fatal(err)
+		}
+		println(guid)
+	}
+}
 
-	i, o = bytes.NewBuffer([]byte{2}), new(bytes.Buffer)
-	serve(i, o)
-	assert.Equal(t, 16, o.Len())
+func BenchmarkParallel10(b *testing.B) {
+	parallelIdGeneration(10, b)
+}
 
-	i, o = bytes.NewBuffer([]byte{255}), new(bytes.Buffer)
-	serve(i, o)
-	assert.Equal(t, 255*8, o.Len())
+func parallelIdGeneration(c int, b *testing.B) {
+	// Setup the workers
+	reqs := make(chan bool)
+	guids := make(chan int64)
+	for i := 0; i < c; i++ {
+		go func() {
+			for {
+				<-reqs
+				g, err := NextId()
+				if err != nil {
+					b.Fatal(err)
+				}
+				println(g)
+				guids <- g
+			}
+		}()
+	}
+	// Request some GUIDs
+	for n := 0; n < b.N; n++ {
+		reqs <- true
+	}
+	// Wait for GUIDs to be generated
+	for n := 0; n < b.N; n++ {
+		<-guids
+	}
 }
