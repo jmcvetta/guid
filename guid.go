@@ -85,17 +85,12 @@ func NewGenerator(datacenter, worker, lastts *int64) Generator {
 	return s
 }
 
-var defaultGenerator Generator
 
-func init() {
+// NextId returns a GUID Generator without requring any special setup.  Not
+// suitable for use in clustered applications.
+func SimpleGenerator() Generator {
 	d := int64(0)
 	w := int64(0)
 	l := int64(-1)
-	defaultGenerator = NewGenerator(&d, &w, &l)
-}
-
-// NextId returns a GUID without requring any special setup.  Not suitable
-// for use in clustered applications.
-func NextId() (int64, error) {
-	return defaultGenerator.NextId()
+	return NewGenerator(&d, &w, &l)
 }

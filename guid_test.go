@@ -11,8 +11,9 @@ func TestUniqueness(t *testing.T) {
 }
 
 func BenchmarkIdGeneration(b *testing.B) {
+	gen := SimpleGenerator()
 	for n := 0; n < b.N; n++ {
-		guid, err := NextId()
+		guid, err := gen.NextId()
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -26,13 +27,14 @@ func BenchmarkParallel10(b *testing.B) {
 
 func parallelIdGeneration(c int, b *testing.B) {
 	// Setup the workers
+	gen := SimpleGenerator()
 	reqs := make(chan bool)
 	guids := make(chan int64)
 	for i := 0; i < c; i++ {
 		go func() {
 			for {
 				<-reqs
-				g, err := NextId()
+				g, err := gen.NextId()
 				if err != nil {
 					b.Fatal(err)
 				}
