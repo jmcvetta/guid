@@ -98,6 +98,11 @@ processed within the same second, together they may sort like:
 NOTE: The A GUIDs will strictly sort, as will B's.
 
 
+## Status
+
+[![Build Status](https://drone.io/github.com/jmcvetta/guid/status.png)](https://drone.io/github.com/jmcvetta/guid/latest)
+
+
 ## Contributing
 
 This is Github. You know the drill. Please make sure you keep your changes in a
